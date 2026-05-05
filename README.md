@@ -2,7 +2,7 @@
 
 A [Claude Code](https://claude.com/claude-code) skill that turns long videos into social-ready clips.
 
-https://github.com/louisedesadeleer/clipify/releases/download/v0.1.0/clipify_demo.mp4
+[![See the demo on X](assets/tweet.png)](https://x.com/LouiseDSadeleer/status/2051652715617378655?s=20)
 
 ![Clipify turns long videos into 9:16 social clips](assets/preview.png)
 
