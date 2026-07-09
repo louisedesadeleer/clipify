@@ -54,7 +54,7 @@ for chunk in chunks:
     for i, w in enumerate(chunk):
         seg_start = w["start"]
         seg_end = chunk[i+1]["start"] if i+1 < len(chunk) else chunk_end
-        if seg_end <= seg_start: seg_end = seg_start + 0.05
+        if seg_end <= seg_start: seg_end = max(w["end"], seg_start + 0.3)
         if P["highlight"]:
             parts = []
             for j, ww in enumerate(chunk):
