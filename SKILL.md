@@ -1,11 +1,21 @@
 ---
 name: clipify
-description: Find the funniest moments in a video, cut them as standalone clips, optionally reformat 16:9 → 9:16 (face-pan or split-screen), and burn opus-style word-by-word captions. Use when the user mentions "clipify," "cut clips from this video," "make shorts from this," "find funny moments," "reframe to 9:16," "vertical clips," or pastes a video file path and wants social-ready cuts.
+description: Find compelling moments in a video — funny dialogue OR repeated impact actions like axe chops, hits, throws, drumbeats — cut them as standalone clips, optionally reformat 16:9 ↔ 9:16, time-warp pans for tighter reveals, and burn opus-style word-by-word captions. Use when the user mentions "clipify," "cut clips from this video," "make shorts from this," "find funny moments," "action montage," "cut on each chop/hit/punch," "reframe to 9:16," "vertical clips," or pastes a video file path and wants social-ready cuts.
 ---
 
 # Clipify
 
-Find the funniest moments in a video, cut them as standalone clips, optionally reformat 16:9 → 9:16 (face-pan or split-screen), and burn opus-style word-by-word captions.
+Find compelling moments in a video, cut them as standalone clips, optionally reformat 16:9 → 9:16 (face-pan or split-screen), time-warp pans for tighter reveals, and burn opus-style word-by-word captions.
+
+## Modes
+
+Pick one before Step 1. The choice changes how you find moments and whether captions apply.
+
+- **Dialogue mode** (default for podcasts, interviews, talking-heads): Whisper transcribes, you scan for punchlines / reactions / awkward pauses. → Step 1A. Captions in Step 5.
+- **Action mode** (woodchopping, sports, percussion, drumming, anything with repeated impact sounds): skip Whisper entirely, run `detect_transients.py` to find each strike, cut on each one. → Step 1B. Skip Step 5; the strike sounds *are* the rhythm.
+- **Hybrid**: dialogue mode for talking sections, action mode for the rest, intercut. Use both 1A and 1B.
+
+If the user says "I'm not talking in this," you're in action mode. If they say "cut on each X" (chop, hit, punch, drumbeat, swing, footstep), you're in action mode. Default to dialogue mode otherwise.
 
 ## Inputs
 
@@ -23,6 +33,7 @@ Find the funniest moments in a video, cut them as standalone clips, optionally r
   - `build_pan.py` — ffmpeg crop x-expression with hard cuts
   - `build_ass.py` — opus-style ASS captions from whisper JSON
   - `audio_align.py` — find offset of a sub-clip in a longer source
+  - `detect_transients.py` — find sharp impact sounds (action mode); see `--help`
 
 Working dir: `/tmp/clipify/` (mkdir at start, leave artifacts for debugging).
 
@@ -30,7 +41,7 @@ Working dir: `/tmp/clipify/` (mkdir at start, leave artifacts for debugging).
 
 ## Workflow
 
-### Step 1 — Find the funniest parts
+### Step 1A — Find dialogue moments (dialogue mode)
 
 ```bash
 mkdir -p /tmp/clipify
@@ -47,6 +58,45 @@ Read the resulting JSON (or `.txt`) and pick 3–5 candidate clips. Funny signal
 - **Audio peaks:** detect via `ffmpeg -af volumedetect` or look for rapid back-and-forth (alternating short Whisper segments)
 
 For each candidate, propose: `[start, end, why-it's-funny, suggested title]`. Aim for 10–25s clips. Show the list and let the user confirm/pick.
+
+### Step 1B — Find each strike (action mode)
+
+Replace Whisper with audio-transient detection. The detector finds sharp impacts (axe-on-wood, fist-on-pad, drumhead, ball-on-bat, wood landing on a pile) by computing spectral flux on the 1–6 kHz band — the broadband impulse an impact creates that ambient/wind doesn't.
+
+```bash
+ffmpeg -y -hwaccel videotoolbox -i "$VIDEO" -vn -ac 1 -ar 16000 /tmp/clipify/audio.wav
+python3 <skill-dir>/scripts/detect_transients.py /tmp/clipify/audio.wav \
+  --min-flux 30 --min-gap 0.6 > /tmp/clipify/strikes.json
+```
+
+Tuning:
+
+- `--min-flux 30` is the sane default. Real impacts register 50–300; ambient/wind sits at 5–15. Too many false positives → raise to 40–50. Too few hits → drop to 20.
+- `--min-gap 0.6` (seconds) is the closest two strikes can be. Fast drumming may need 0.2; chopping is fine at 0.6–1.0.
+- `--band 1000:6000` covers wood/metal/glass impacts. Heavy thuds (kick drum, body shots) live lower (`--band 200:2000`); whistles/clinks/snare cracks higher (`--band 4000:10000`).
+- For multi-clip sources (a folder of phone clips), run the detector on each clip and pick a varied set across angles. Aim for 25–40 strikes for a 45–60s montage at ~0.9s per shot.
+
+Each "shot" should start ~0.4s before the strike (showing wind-up) and end ~0.5s after (strike + brief follow-through). That's ~0.9s per beat.
+
+### Step 1.5 — Verify each candidate is in frame
+
+**Always do this before rendering**, in either mode. Audio detection finds the *sound* of an event; the camera might not have captured it. Skipping this is the #1 way to get user feedback like "you cut on chops where I'm not even visible."
+
+```bash
+# Sample one frame at each candidate strike time T:
+for T in $STRIKE_TIMES; do
+  ffmpeg -y -ss "$T" -i "$VIDEO" -frames:v 1 -vf scale=320:-1 \
+    /tmp/clipify/verify_${T}.jpg
+done
+```
+
+Read each verify image and drop the candidate if:
+
+- The subject is bent down, off-frame, or behind an obstacle
+- A thumb is on the lens (yes, this happens — and you only catch it visually)
+- It's clearly a different sound source (door slam, dropped tool) that triggered the detector
+
+For ~30 candidates this is one fast `ffmpeg` call each plus a single batch image read. Cheap insurance.
 
 ### Step 2 — Trim each chosen clip
 
@@ -125,7 +175,31 @@ Two stacked tiles, 1080×960 each. The active speaker's tile is on top — overl
 
 Build `<RIGHT_SPEAKER_ENABLE>` from `segments.json` as `between(t,a,b)+between(t,a,b)+...` over the right-speaker segments. Tile crops should target ~720×640 around each face (1.125:1 to match 1080×960).
 
+### Step 4c — Time-warping reveals (optional)
+
+When the user wants a slow scenic / pan / reveal shot tightened ("cut this in half") without losing the arc, speed-ramp instead of trimming. Trimming forces you to drop part of the arc; speed-ramping preserves all the beats at higher tempo.
+
+```bash
+# 2x speed: 12s arc → 6s output, audio pitch preserved via atempo
+ffmpeg -y -ss "$START" -i "$CLIP" -t "$ORIG_DUR" \
+  -vf "setpts=PTS/2,scale=1080:1920:flags=lanczos,fps=30" \
+  -af "atempo=2.0" \
+  -c:v libx264 -preset fast -crf 21 -pix_fmt yuv420p \
+  -c:a aac -b:a 128k /tmp/clipify/clip_2x.mp4
+```
+
+Rules of thumb:
+
+- **1.5x** — human movement that should feel "slightly brisk" without looking sped up
+- **2x** — punchier reveal; still reads as natural
+- **3x–4x** — time-lapse vibe (chain `atempo=2.0,atempo=2.0` for 4x; `atempo` accepts only 0.5–2.0 per filter instance)
+- Drop `-af atempo` and mute the segment if the audio is just ambient/wind and the chipmunking would be distracting
+
+Useful when the rest of the cut is rhythmic (chop montage, chat back-and-forth) and the reveal would otherwise feel like a dead spot.
+
 ### Step 5 — Add subtitles
+
+Skip this step in action mode — the strike sounds are the rhythm and captions just clutter the visual.
 
 Ask once (only if user hasn't already specified a style):
 
@@ -159,6 +233,9 @@ ffmpeg -y -i /tmp/clipify/clip_panned.mp4 -vf "subtitles=/tmp/clipify/captions.a
 
 ## Pitfalls (lessons from prior runs — don't repeat)
 
+- **Audio detection ≠ visible event.** Always run Step 1.5 (verify each candidate frame) before rendering. The detector finds the *sound* of a chop, not whether the chopper is in frame. Hits where the subject is bent over, off-camera, or where a thumb is on the lens still trigger the audio detector. Catch them before rendering.
+- **Spectral-flux band matters.** Default `--band 1000:6000` covers wood/metal/glass impacts. Heavy low thuds (kick drum, body shots) need `--band 200:2000`. Whistles, clinks, snare cracks need `--band 4000:10000`. If `--min-flux 30` returns nothing, try lowering to 15 first; if it returns thousands, try a different band before raising the threshold.
+- **Speed-ramp audio in pairs.** `atempo` accepts only 0.5–2.0 in a single filter; for 4x chain `atempo=2.0,atempo=2.0`. Without `atempo`, `setpts` alone gives chipmunk audio.
 - **Don't over-tune ROIs.** Two iterations max. Motion-diff is forgiving — wider ROIs covering mouth+chin work fine even if not perfectly mouth-centered.
 - **Watch out for scene cuts inside a clip.** Run `ffmpeg -filter:v "select='gt(scene,0.3)',showinfo" -f null -` to count cuts. If a 16:9→9:16 clip has many cuts, the fixed face ROIs only work for the dominant scene; warn the user, and offer to either pick a single-take clip or accept off-center framing during cuts.
 - **Source resolution matters.** If source is 4K, either downscale to 1920×1080 first (faster, fine for 9:16 output) or multiply all ROI/pan coordinates by 2.
