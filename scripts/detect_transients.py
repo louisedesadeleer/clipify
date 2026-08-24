@@ -24,6 +24,10 @@ import numpy as np
 
 def detect(path, band_lo=1000, band_hi=6000, min_flux=30.0, min_gap=0.6):
     w = wave.open(path, 'rb')
+    if w.getnchannels() != 1 or w.getsampwidth() != 2:
+        raise SystemExit(
+            f"expected 16-bit mono WAV, got {w.getnchannels()}ch {w.getsampwidth()*8}-bit "
+            f"— convert with: ffmpeg -i INPUT -vn -ac 1 -ar 16000 audio.wav")
     sr = w.getframerate()
     n = w.getnframes()
     data = np.frombuffer(w.readframes(n), dtype=np.int16).astype(np.float32) / 32768.0
