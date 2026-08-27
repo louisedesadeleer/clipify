@@ -31,6 +31,11 @@ for seg in data["segments"]:
     for w in seg.get("words", []):
         words.append({"start": w["start"], "end": w["end"], "text": w["word"].strip()})
 
+MIN_WORD = 0.15
+for k in range(1, len(words)):
+    if words[k]["start"] < words[k-1]["start"] + MIN_WORD:
+        words[k]["start"] = words[k-1]["start"] + MIN_WORD
+
 chunks = [words[i:i+P["chunk"]] for i in range(0, len(words), P["chunk"])]
 
 header = f"""[Script Info]
@@ -54,7 +59,7 @@ for chunk in chunks:
     for i, w in enumerate(chunk):
         seg_start = w["start"]
         seg_end = chunk[i+1]["start"] if i+1 < len(chunk) else chunk_end
-        if seg_end <= seg_start: seg_end = max(w["end"], seg_start + 0.3)
+        if seg_end <= seg_start: seg_end = seg_start + 0.05
         if P["highlight"]:
             parts = []
             for j, ww in enumerate(chunk):
