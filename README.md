@@ -18,10 +18,17 @@ Most "auto-clip" tools are either expensive SaaS, slow, or produce slop. This sk
 
 ## Requirements
 
-- macOS (uses VideoToolbox for hardware-accelerated decode — works on Linux/Windows if you remove `-hwaccel videotoolbox` flags)
+- macOS, Linux or Windows. The hardware-accelerated decode flag differs per
+  platform and is set once as `$HWACCEL` — see "Platform notes" in `SKILL.md`.
+  On Windows, run the commands through Git Bash / MSYS2 rather than PowerShell.
 - [Claude Code](https://claude.com/claude-code)
-- `ffmpeg` with `libx264` (`brew install ffmpeg`)
-- [`whisper`](https://github.com/openai/whisper) (`pip install openai-whisper`)
+- `ffmpeg` with `libx264` (`brew install ffmpeg`, `apt install ffmpeg`, or
+  `winget install Gyan.FFmpeg`)
+- Whisper, either [`openai-whisper`](https://github.com/openai/whisper)
+  (`pip install openai-whisper`) or
+  [`whisper-ctranslate2`](https://github.com/Softcatala/whisper-ctranslate2)
+  (`pip install whisper-ctranslate2`) — same arguments, same JSON, and the
+  latter is faster and skips the ~2.5 GB PyTorch dependency
 - Python 3 with `numpy` (`pip install numpy`)
 
 ## Install

@@ -25,8 +25,14 @@ If the user says "I'm not talking in this," you're in action mode. If they say "
 
 ## Tooling (use only the fastest path)
 
-- **Whisper:** `whisper --model tiny.en --word_timestamps True --output_format json` (≈10× faster than `small.en`; quality fine for English). For non-English: `--model base` (drop `--language`).
-- **ffmpeg:** add `-hwaccel videotoolbox` for decode and `-preset ultrafast` for renders. Use `-c:v libx264 -crf 20` for the final master.
+- **Whisper:** either `whisper` (openai-whisper) or `whisper-ctranslate2`
+  (faster-whisper/CTranslate2). The two take the same arguments and emit the same
+  JSON, so `build_ass.py` reads either unchanged; `whisper-ctranslate2` is several
+  times faster and avoids a ~2.5 GB PyTorch install. Use `--model tiny.en
+  --word_timestamps True --output_format json` (≈10× faster than `small.en`;
+  quality fine for English). For non-English: `--model base` (drop `--language`).
+- **ffmpeg:** `$HWACCEL` for decode (see Platform notes) and `-preset ultrafast`
+  for renders. Use `-c:v libx264 -crf 20` for the final master.
 - **Numpy** for audio alignment (FFT cross-correlation). No scipy/cv2 needed.
 - **Scripts:** `<skill-dir>/scripts/` (where `<skill-dir>` is the directory containing this SKILL.md — typically `~/.claude/skills/clipify/`)
   - `analyze.py` — speaker timeline from two ROI motion files
@@ -37,6 +43,44 @@ If the user says "I'm not talking in this," you're in action mode. If they say "
 
 Working dir: `/tmp/clipify/` (mkdir at start, leave artifacts for debugging).
 
+## Platform notes
+
+Set these once at the start of a run; every command below uses them.
+
+```bash
+# macOS
+HWACCEL="-hwaccel videotoolbox"; PY=python3
+# Linux
+HWACCEL="-hwaccel vaapi";        PY=python3
+# Windows
+HWACCEL="-hwaccel d3d11va";      PY=python
+
+# Whisper backend (both accept the same args and emit the same JSON)
+WHISPER="whisper-ctranslate2 --device cpu --compute_type int8"   # or: WHISPER=whisper
+```
+
+Leave `HWACCEL` empty if decode acceleration misbehaves — it only speeds up
+decode, and the x264 encode dominates either way.
+
+### Windows
+
+- **Run every command through a POSIX shell (Git Bash / MSYS2), not PowerShell.**
+  The `filter_complex` strings are full of quotes, commas and `[labels]`;
+  PowerShell mangles them silently and ffmpeg receives something other than what
+  is written here. Git Bash also translates `/tmp/...` into a native path when it
+  hands the argument to ffmpeg, so the paths in this file work as-is.
+- **Use `python`, not `python3`.** On Windows `python3` typically resolves to the
+  Microsoft Store app-execution alias, which prints a message and exits 0 — so a
+  script invoked that way fails silently instead of erroring.
+- **`subtitles=` needs a relative filename.** See Step 5.
+- Working dir `/tmp/clipify/` lands in `%LOCALAPPDATA%\Temp\clipify`.
+- **CUDA needs extra DLLs.** `whisper-ctranslate2 --device cuda` fails with
+  `Library cublas64_12.dll is not found`: CTranslate2 wants cuBLAS 12 and cuDNN 9,
+  which ship with neither package. Usually not worth it — `--device cpu
+  --compute_type int8` runs around 9× realtime on `tiny.en`. For hour-long
+  sources, `pip install nvidia-cublas-cu12 nvidia-cudnn-cu12` and add
+  `site-packages/nvidia/*/bin` to PATH (>1 GB of downloads).
+
 ---
 
 ## Workflow
@@ -45,8 +89,8 @@ Working dir: `/tmp/clipify/` (mkdir at start, leave artifacts for debugging).
 
 ```bash
 mkdir -p /tmp/clipify
-ffmpeg -y -hwaccel videotoolbox -i "$VIDEO" -vn -ac 1 -ar 16000 /tmp/clipify/audio.wav
-whisper /tmp/clipify/audio.wav --model tiny.en --word_timestamps True --output_format json --output_dir /tmp/clipify --language en
+ffmpeg -y $HWACCEL -i "$VIDEO" -vn -ac 1 -ar 16000 /tmp/clipify/audio.wav
+$WHISPER /tmp/clipify/audio.wav --model tiny.en --word_timestamps True --output_format json --output_dir /tmp/clipify --language en
 ```
 
 Read the resulting JSON (or `.txt`) and pick 3–5 candidate clips. Funny signals to scan for:
@@ -64,8 +108,8 @@ For each candidate, propose: `[start, end, why-it's-funny, suggested title]`. Ai
 Replace Whisper with audio-transient detection. The detector finds sharp impacts (axe-on-wood, fist-on-pad, drumhead, ball-on-bat, wood landing on a pile) by computing spectral flux on the 1–6 kHz band — the broadband impulse an impact creates that ambient/wind doesn't.
 
 ```bash
-ffmpeg -y -hwaccel videotoolbox -i "$VIDEO" -vn -ac 1 -ar 16000 /tmp/clipify/audio.wav
-python3 <skill-dir>/scripts/detect_transients.py /tmp/clipify/audio.wav \
+ffmpeg -y $HWACCEL -i "$VIDEO" -vn -ac 1 -ar 16000 /tmp/clipify/audio.wav
+$PY <skill-dir>/scripts/detect_transients.py /tmp/clipify/audio.wav \
   --min-flux 30 --min-gap 0.6 > /tmp/clipify/strikes.json
 ```
 
@@ -141,7 +185,7 @@ Skip the question if there's only one face (single-talker clip). For single-talk
 3. **Build speaker timeline** (min dwell 1.0s — short interjections merge into the prior speaker):
 
    ```bash
-   python3 <skill-dir>/scripts/analyze.py /tmp/clipify/L.txt /tmp/clipify/R.txt 1.0 > /tmp/clipify/segments.json
+   $PY <skill-dir>/scripts/analyze.py /tmp/clipify/L.txt /tmp/clipify/R.txt 1.0 > /tmp/clipify/segments.json
    ```
 
 4. **Pick pan x-coordinates** for a 9:16 vertical strip from the source. With source W=1920 and target W=1080, crop strip width = 608.
@@ -151,8 +195,8 @@ Skip the question if there's only one face (single-talker clip). For single-talk
 5. **Generate the hard-cut x expression and render:**
 
    ```bash
-   EXPR=$(python3 <skill-dir>/scripts/build_pan.py /tmp/clipify/segments.json $LEFT_X $RIGHT_X)
-   ffmpeg -y -hwaccel videotoolbox -i clip.mp4 -filter_complex \
+   EXPR=$($PY <skill-dir>/scripts/build_pan.py /tmp/clipify/segments.json $LEFT_X $RIGHT_X)
+   ffmpeg -y $HWACCEL -i clip.mp4 -filter_complex \
      "[0:v]crop=608:1080:x='$EXPR':y=0,scale=1080:1920:flags=lanczos[v]" \
      -map "[v]" -map 0:a -c:v libx264 -preset fast -crf 20 -pix_fmt yuv420p \
      -c:a aac -b:a 192k /tmp/clipify/clip_panned.mp4
@@ -203,7 +247,7 @@ Skip this step in action mode — the strike sounds are the rhythm and captions 
 
 Ask once (only if user hasn't already specified a style):
 
-> "Three subtitle styles: **opus** (big bold white, yellow active-word highlight), **karaoke** (4-word chunks, green highlight), **minimal** (clean Helvetica, no highlight). Or paste an example you like."
+> "Three subtitle styles: **opus** (big bold white, yellow active-word highlight), **karaoke** (4-word chunks, green highlight), **minimal** (clean Arial, no highlight). Or paste an example you like."
 
 If they paste a reference image/example: match the font, size, weight, color, position, and animation as closely as possible — write a custom ASS by hand or extend `build_ass.py`.
 
@@ -211,14 +255,19 @@ Else use the preset:
 
 ```bash
 # Re-run whisper on the trimmed clip for accurate timestamps relative to clip start
-whisper /tmp/clipify/clip_panned.mp4 --model tiny.en --word_timestamps True --output_format json --output_dir /tmp/clipify --language en
-python3 <skill-dir>/scripts/build_ass.py /tmp/clipify/clip_panned.json /tmp/clipify/captions.ass opus
+$WHISPER /tmp/clipify/clip_panned.mp4 --model tiny.en --word_timestamps True --output_format json --output_dir /tmp/clipify --language en
+$PY <skill-dir>/scripts/build_ass.py /tmp/clipify/clip_panned.json /tmp/clipify/captions.ass opus
 ```
 
-Burn captions:
+Burn captions. **`cd` into the working dir and pass a bare filename** — this is
+required on Windows and harmless everywhere else. An absolute path inside the
+`subtitles=` filter breaks there: MSYS rewrites `/tmp/...` to `C:/Users/...` and
+libavfilter reads the drive-letter colon as an option separator, failing with
+`Unable to parse "original_size"`. A relative filename sidesteps it.
 
 ```bash
-ffmpeg -y -i /tmp/clipify/clip_panned.mp4 -vf "subtitles=/tmp/clipify/captions.ass" \
+cd /tmp/clipify
+ffmpeg -y -i clip_panned.mp4 -vf "subtitles=captions.ass" \
   -c:v libx264 -preset fast -crf 20 -c:a copy "$OUTPUT.mp4"
 ```
 
@@ -226,7 +275,9 @@ ffmpeg -y -i /tmp/clipify/clip_panned.mp4 -vf "subtitles=/tmp/clipify/captions.a
 
 - Save each output to `<source_dir>/clipify_out/` (mkdir if missing)
 - Print one line per clip: name, duration, what was funny, output path
-- Open the first output with `open <path>` so the user can check it
+- Open the first output so the user can check it: `open "$OUT"` (macOS),
+  `xdg-open "$OUT"` (Linux), `cmd //c start "" "$(cygpath -w "$OUT")"` (Windows —
+  the double slash in `//c` is required, Git Bash eats a single one)
 - Offer to iterate (different style, different ROI, swap to split-screen, retime captions)
 
 ---

@@ -15,7 +15,7 @@ PLAY_W, PLAY_H = 1080, 1920
 PRESETS = {
     "opus":     dict(font="Arial Black", size=100, chunk=3, highlight="&H0000FFFF&", outline=8, shadow=3),
     "karaoke":  dict(font="Arial Black", size=110, chunk=4, highlight="&H0000FF00&", outline=6, shadow=2),
-    "minimal":  dict(font="Helvetica",   size=70,  chunk=6, highlight=None,          outline=4, shadow=1),
+    "minimal":  dict(font="Arial",       size=70,  chunk=6, highlight=None,          outline=4, shadow=1),
 }
 P = PRESETS.get(STYLE, PRESETS["opus"])
 WHITE = "&H00FFFFFF&"
