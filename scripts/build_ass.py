@@ -31,6 +31,11 @@ for seg in data["segments"]:
     for w in seg.get("words", []):
         words.append({"start": w["start"], "end": w["end"], "text": w["word"].strip()})
 
+MIN_WORD = 0.15
+for k in range(1, len(words)):
+    if words[k]["start"] < words[k-1]["start"] + MIN_WORD:
+        words[k]["start"] = words[k-1]["start"] + MIN_WORD
+
 chunks = [words[i:i+P["chunk"]] for i in range(0, len(words), P["chunk"])]
 
 header = f"""[Script Info]
